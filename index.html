@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Absolute Final Tuned Runner Game</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #282c34; 
+            flex-direction: column;
+            font-family: 'Arial', sans-serif;
+        }
+        canvas {
+            border: 3px solid #ffeb3b; 
+            background-color: #3a3f50; 
+            box-shadow: 0 0 25px rgba(255, 235, 59, 0.7);
+        }
+        h1 {
+            color: #ffeb3b;
+            margin-bottom: 10px;
+        }
+        p {
+            color: #abb2bf;
+            font-size: 1.2em;
+        }
+
+        /* Style for control buttons */
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            font-size: 1.1em;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            box-shadow: 0 4px #cc5757;
+        }
+
+        #restartButton {
+            background-color: #ff6b6b; /* Red/Accent color */
+            box-shadow: 0 4px #cc5757;
+        }
+        #restartButton:hover { background-color: #ff8b8b; }
+        #restartButton:active { transform: translateY(4px); box-shadow: 0 2px #cc5757; }
+
+        #pauseButton {
+            background-color: #3a9d8f; /* Teal/Pause color */
+            box-shadow: 0 4px #267b71;
+        }
+        #pauseButton:hover { background-color: #5ac9b5; }
+        #pauseButton:active { transform: translateY(4px); box-shadow: 0 2px #267b71; }
+
+    </style>
+</head>
+<body >
+
+    <h1>🏃💨 Boosted Runner</h1>
+    <canvas id="gameCanvas" width="800" height="350"></canvas> 
+    <p>Use the SPACEBAR or UP arrow to Jump/Boost. Score: <span id="scoreDisplay">0</span> | Speed Multiplier: <span id="speedDisplay">1.0x</span> | Boost: <span id="boostDisplay">5.0</span></p>
+
+    <!-- NEW CONTROL BUTTONS -->
+    <button id="pauseButton" style="display: none;">⏸️ Pause</button>
+    <button id="restartButton" style="display: none;">🔄 Restart Game</button>
+
+
+    <script>
+        // =====================================================
+        // === 🎨 TUNING PANEL - ADJUST THESE VALUES! ==========
+        // =====================================================
+
+        // --- Physics & Movement Constants ---
+        const GRAVITY = 0.6;     
+        const BASE_SPEED = 2.0;  
+        const PLAYER_SIZE = 20; // 30
+
+        // --- Scoring & Difficulty Constants ---
+        const POINTS_PER_CACTUS_JUMP = 10;  // 5
+        const GROUND_HEIGHT = 30;
+        const OBSTACLE_EMOJI = '🌵'; 
+
+        // --- Boost Mechanics (Your Tuned Values!) ---
+        const MAX_BOOST_CHARGES = 5; 
+        const BASE_MAX_LIFT = 10;    // 15
+        const BOOST_IMPACT_VELOCITY = -12; 
+        const BASE_REGEN_RATE = 0.01;  
+
+        // --- New Feature Toggle! ---
+        const BOOST_RECHARGE_ON_LANDING = true; 
+
+
+        // --- Spawning & Density Controls ---
+        let TARGET_SCORE_FOR_DOUBLE_SPEED = 1000; 
+        const MINIMUM_SPAWN_INTERVAL = 25000;     
+        const BASE_SPAWN_RATE = 150;           
+
+
+        // =====================================================
+        // === ⚙️ GAME ENGINE CORE ==========
+        // =====================================================
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreElement = document.getElementById('scoreDisplay');
+        const speedElement = document.getElementById('speedDisplay');
+        const boostElement = document.getElementById('boostDisplay'); 
+        // Get the new button elements
+        const restartButton = document.getElementById('restartButton');
+        const pauseButton = document.getElementById('pauseButton');
+
+
+        // --- Game State Variables (Dynamic) ---
+        let score = 0; 
+        let isGameOver = false;
+        let isPaused = false; // <<< NEW STATE: Controls the loop suspension
+        let frameCounter = 0;
+        let currentGameSpeed = BASE_SPEED; 
+        let lastSpawnFrame = 0;
+
+        // --- Input Tracking for Boost Regeneration ---
+        let isBoostingInputActive = false;
+
+
+        // --- Player Object (Unchanged) ---
+        const player = {
+            x: 50,
+            y: canvas.height - GROUND_HEIGHT - (PLAYER_SIZE / 2),
+            emoji: '🏃💨', 
+            velocityY: 0,
+            isJumping: false,
+            boostCharges: MAX_BOOST_CHARGES 
+        };
+
+        // --- Obstacle Management (Unchanged) ---
+        let obstacles = [];
+
+        /** Creates a new obstacle object. */
+        function createObstacle() {
+            const randomHeight = Math.floor(Math.random() * 20) + 15; 
+            return {
+                x: canvas.width,
+                y: canvas.height - GROUND_HEIGHT - randomHeight, 
+                height: randomHeight, 
+                emoji: OBSTACLE_EMOJI,
+                scored: false 
+            };
+        }
+
+        /** Resets the game state entirely. */
+        function resetGame() {
+            // Reset all core variables
+            player.y = canvas.height - GROUND_HEIGHT - (PLAYER_SIZE / 2);
+            player.velocityY = 0;
+            player.isJumping = false;
+            obstacles = []; 
+            score = 0; 
+            frameCounter = 0; 
+            lastSpawnFrame = 0; 
+            currentGameSpeed = BASE_SPEED; 
+
+            // Reset boost state for a fresh start!
+            player.boostCharges = MAX_BOOST_CHARGES; 
+            
+            // Update UI and control visibility
+            scoreElement.textContent = score;
+            speedElement.textContent = '1.0x';
+            boostElement.textContent = player.boostCharges.toFixed(1);
+            restartButton.style.display = 'none'; // HIDE RESTART ON START/RESET
+            pauseButton.style.display = 'inline-block'; // SHOW PAUSE BUTTON
+
+            isGameOver = false; 
+            isPaused = false; // Crucial: Ensure it starts running!
+        }
+
+        // --- Input Handling (Unchanged) ---
+        function handleBoostAction() {
+            if (player.boostCharges <= 0) return;
+
+            const chargeRatio = player.boostCharges / MAX_BOOST_CHARGES; 
+            const impulseLift = BASE_MAX_LIFT * chargeRatio;
+
+            player.velocityY = BOOST_IMPACT_VELOCITY;
+            player.y -= impulseLift / 2; 
+            player.isJumping = true;
+
+            player.boostCharges--; 
+        }
+
+
+        document.addEventListener('keydown', (e) => {
+            const isBoostKey = e.code === 'Space' || e.key === 'ArrowUp';
+
+            if ((isBoostKey && !isGameOver && !isPaused)) { // <-- CHECK IS PAUSED
+                handleBoostAction(); 
+                isBoostingInputActive = true; 
+            } else if (isGameOver) {
+                 // Restart on keyboard press during Game Over state
+                resetGame(); 
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            const isBoostKey = e.code === 'Space' || e.key === 'ArrowUp';
+            if (isBoostKey) {
+                isBoostingInputActive = false;
+            }
+        });
+        
+        // *** NEW: Pause/Resume Logic ***
+        function togglePause() {
+            if (isGameOver) return; // Cannot pause if game is over
+
+            isPaused = !isPaused;
+            const buttonText = isPaused ? '▶️ Resume' : '⏸️ Pause';
+            pauseButton.textContent = buttonText;
+            
+            // Optional: If paused, clear the frame counter to prevent weird updates on resume
+            if (isPaused) {
+                frameCounter = 0; 
+            }
+        }
+
+        pauseButton.addEventListener('click', togglePause);
+
+
+        // --- Update Logic (Unchanged) ---
+
+        function updateSpeed() {
+            const MAX_MULTIPLIER = 2.0; 
+            const accelerationFactor = Math.min(1, score / TARGET_SCORE_FOR_DOUBLE_SPEED); 
+            currentGameSpeed = BASE_SPEED + (BASE_SPEED * MAX_MULTIPLIER * accelerationFactor);
+
+            speedElement.textContent = `${(currentGameSpeed / BASE_SPEED).toFixed(1)}x`;
+        }
+
+
+        function updatePlayer() {
+            if (!isBoostingInputActive && player.boostCharges < MAX_BOOST_CHARGES) {
+                const regenAmount = BASE_REGEN_RATE * (currentGameSpeed / BASE_SPEED); 
+                player.boostCharges = Math.min(MAX_BOOST_CHARGES, player.boostCharges + regenAmount);
+            }
+
+            player.velocityY += GRAVITY;
+            player.y += player.velocityY;
+
+            const groundLevel = canvas.height - GROUND_HEIGHT - (PLAYER_SIZE / 2); 
+            if (player.y >= groundLevel) {
+                player.y = groundLevel;
+                player.velocityY = 0;
+                player.isJumping = false;
+
+                if (BOOST_RECHARGE_ON_LANDING) {
+                    player.boostCharges = MAX_BOOST_CHARGES;
+                }
+            }
+        }
+
+        function updateObstacles() {
+            // ... [Omitted for brevity, logic remains the same] ...
+            if (obstacles.length === 0 && lastSpawnFrame < 50) { 
+                obstacles.push(createObstacle());
+                lastSpawnFrame = frameCounter;
+            }
+
+            obstacles.forEach(obstacle => {
+                obstacle.x -= currentGameSpeed;
+            });
+
+            obstacles = obstacles.filter(obstacle => obstacle.x + 30 > -30);
+
+
+            frameCounter++;
+            const difficultyFactor = Math.min(1, score / TARGET_SCORE_FOR_DOUBLE_SPEED); 
+            let currentMaxInterval = BASE_SPAWN_RATE * (1 - difficultyFactor); 
+
+            const finalSpawnInterval = Math.max(currentMaxInterval, MINIMUM_SPAWN_INTERVAL);
+
+
+            if (frameCounter > lastSpawnFrame + Math.random() * finalSpawnInterval) {
+                obstacles.push(createObstacle());
+                lastSpawnFrame = frameCounter;
+            }
+        }
+
+        function checkCollision() {
+            // ... [Omitted for brevity, logic remains the same] ...
+            const playerWidth = PLAYER_SIZE; 
+            const playerHeight = PLAYER_SIZE; 
+
+            for (let i = 0; i < obstacles.length; i++) {
+                const obs = obstacles[i];
+                if (player.x + playerWidth > obs.x && 
+                    player.x < obs.x + 30 &&
+                    player.y + playerHeight > obs.y && 
+                    player.y < obs.y + obs.height) 
+                {
+                    isGameOver = true;
+                    break; 
+                }
+            }
+        }
+
+        function awardPoints() {
+             // ... [Omitted for brevity, logic remains the same] ...
+             for (let i = 0; i < obstacles.length; i++) {
+                const obs = obstacles[i];
+                if (obs.x + 30 <= player.x && !obs.scored) {
+                    score += POINTS_PER_CACTUS_JUMP; 
+                    obstacles[i].scored = true;      
+                }
+            }
+        }
+
+
+        // --- Drawing Functions (Unchanged) ---
+
+        function drawPlayer() {
+            ctx.font = '40px Arial'; 
+            ctx.textAlign = 'center';
+            ctx.fillText(player.emoji, player.x + 15, player.y + PLAYER_SIZE); 
+        }
+
+        function drawObstacles() {
+            ctx.font = '40px Arial'; 
+            ctx.textAlign = 'center';
+            obstacles.forEach(obs => {
+                const textYBaseline = canvas.height - GROUND_HEIGHT + (obs.height / 3);
+                ctx.fillText(obs.emoji, obs.x + 15, textYBaseline);
+            });
+        }
+
+        function drawGround() {
+            ctx.fillStyle = '#4c8f6a'; 
+            ctx.fillRect(0, canvas.height - GROUND_HEIGHT, canvas.width, GROUND_HEIGHT);
+        }
+
+        function drawGameOver() {
+            drawGround(); 
+            drawObstacles(); 
+            drawPlayer(); 
+
+            // Overlay Screen
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)'; 
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Text
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#ff6b6b';
+            ctx.font = '72px sans-serif';
+            ctx.fillText('💀 GAME OVER 💀', canvas.width / 2, canvas.height / 2 - 50);
+            
+            ctx.fillStyle = '#abb2bf';
+            ctx.font = '36px sans-serif';
+            ctx.fillText(`Final Score: ${Math.floor(score)}`, canvas.width / 2, canvas.height / 2 + 15);
+
+            // Prompt for restart/keyboard press
+            ctx.fillStyle = '#ffeb3b';
+            ctx.font = '24px sans-serif';
+            ctx.fillText('Click Restart or Press SPACE', canvas.width / 2, canvas.height / 2 + 70);
+
+            // Make sure the restart button is visible when game over happens!
+            restartButton.style.display = 'inline-block';
+            pauseButton.style.display = 'none'; // Hide pause button in Game Over state
+        }
+
+
+        // --- Main Game Loop ---
+
+        function gameLoop() {
+            if (isGameOver) {
+                drawGameOver(); 
+                return; 
+            }
+            
+            // *** NEW CHECK: If paused, only redraw the current static frame and exit. ***
+            if (isPaused) {
+                 ctx.clearRect(0, 0, canvas.width, canvas.height);
+                 drawGround(); // Still draw ground to keep context
+                 drawObstacles(); 
+                 drawPlayer(); 
+
+                 // Update UI state even while paused so the player knows their boost level!
+                 scoreElement.textContent = Math.floor(score); 
+                 boostElement.textContent = player.boostCharges.toFixed(1); 
+
+                 requestAnimationFrame(gameLoop); // Keep RAF ticking, just don't update logic
+                 return; 
+            }
+
+
+            // --- NORMAL RUNNING LOGIC BELOW THIS LINE ---
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            updateSpeed(); 
+            updatePlayer(); 
+            updateObstacles();
+            awardPoints(); 
+            checkCollision();
+
+            drawGround();
+            drawObstacles();
+            drawPlayer();
+
+            scoreElement.textContent = Math.floor(score); 
+            boostElement.textContent = player.boostCharges.toFixed(1); 
+            
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- Start the Game ---
+        resetGame(); 
+        gameLoop(); 
+
+    </script>
+
+</body >
+</html>
